@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+Output/
+hotkeys.json
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
