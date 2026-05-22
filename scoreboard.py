@@ -180,6 +180,8 @@ class ScoreboardApp(QMainWindow):
         self._apply_theme()
         self._refresh_clock_display()
         self._write_outputs()
+        # Garante que nenhum input tem foco ao abrir (hotkeys funcionam imediatamente)
+        QTimer.singleShot(0, self.setFocus)
 
     # ── UI construction ────────────────────────────────────────────────────────
 
@@ -223,6 +225,8 @@ class ScoreboardApp(QMainWindow):
         self._home_name_input = QLineEdit("Casa")
         self._home_name_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._home_name_input.setMaximumWidth(160)
+        # ClickFocus: só recebe foco quando clicado — não rouba foco ao abrir
+        self._home_name_input.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
         self._half_label = QLabel(HALF_NAMES[1])
         self._half_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -231,6 +235,7 @@ class ScoreboardApp(QMainWindow):
         self._away_name_input = QLineEdit("Visitante")
         self._away_name_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._away_name_input.setMaximumWidth(160)
+        self._away_name_input.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
         names_row.addWidget(self._home_name_input)
         names_row.addStretch()
@@ -692,8 +697,14 @@ class ScoreboardApp(QMainWindow):
         if self.timer_running:
             self.status_bar.showMessage("Pare o cronômetro antes de resetar")
             return
-        self.timer_minutes = self._min_spin.value()
-        self.timer_seconds = self._sec_spin.value()
+        if self.timer_direction == "stopwatch":
+            # Cronômetro volta sempre para 00:00
+            self.timer_minutes = 0
+            self.timer_seconds = 0
+        else:
+            # Contagem regressiva volta para o valor configurado
+            self.timer_minutes = self._min_spin.value()
+            self.timer_seconds = self._sec_spin.value()
         self._refresh_clock_display()
         self.status_bar.showMessage("Tempo resetado")
         self._write_outputs()
