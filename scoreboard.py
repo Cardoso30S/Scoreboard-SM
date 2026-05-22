@@ -29,17 +29,17 @@ DROP_GOAL_POINTS    = 3
 HALF_NAMES = {1: "1º Tempo", 2: "2º Tempo", 3: "Prorrogação", 4: "Prorrogação 2"}
 
 DEFAULT_HOTKEYS: dict[str, str] = {
-    "home_try":        "F1",
-    "home_penalty":    "F2",
-    "home_conversion": "F3",
-    "home_drop":       "F4",
-    "home_undo":       "F5",
-    "timer_toggle":    "Space",
-    "away_try":        "F7",
-    "away_penalty":    "F6",
-    "away_conversion": "F9",
-    "away_drop":       "F8",
-    "away_undo":       "F10",
+    "home_try":        "Ctrl+Q",
+    "home_penalty":    "Ctrl+W",
+    "home_conversion": "Ctrl+E",
+    "home_drop":       "Ctrl+R",
+    "home_undo":       "Ctrl+T",
+    "timer_toggle":    "Ctrl+P",
+    "away_try":        "Ctrl+U",
+    "away_penalty":    "Ctrl+I",
+    "away_conversion": "Ctrl+O",
+    "away_drop":       "Ctrl+P",
+    "away_undo":       "Ctrl+L",
     "timer_reset":     "Ctrl+R",
     "score_reset":     "Ctrl+0",
     "half_up":         "Ctrl+Up",
@@ -54,9 +54,9 @@ DECK_LAYOUT: list[tuple[str, str, str]] = [
     ("away_penalty",    "Away\nPEN/TRY +7", "#1a3d7a"),
     ("away_try",        "Away\nTRY +5",     "#1d6b2a"),
     ("home_conversion", "Home\nCNV +2",    "#7a5a1a"),
-    ("home_drop",       "Home\nDRP +3",    "#5a1a7a"),
+    ("home_drop",       "Home\nPEN/DRP +3",    "#5a1a7a"),
     ("timer_reset",     "RESET\nTEMPO",    "#4a2a00"),
-    ("away_drop",       "Away\nDRP +3",    "#5a1a7a"),
+    ("away_drop",       "Away\nPEN/DRP +3",    "#5a1a7a"),
     ("away_conversion", "Away\nCNV +2",    "#7a5a1a"),
     ("home_undo",       "Home\n−1",        "#7a1a1a"),
     ("half_up",         "TEMPO\nUP",       "#1a4a7a"),
@@ -70,7 +70,7 @@ ACTIONS_LEFT = [
     ("home_try",        "TRY Casa (+5)"),
     ("home_penalty",    "Penal/Try Casa (+7)"),
     ("home_conversion", "Conversão Casa (+2)"),
-    ("home_drop",       "Drop Casa (+3)"),
+    ("home_drop",       "Penal/Drop Casa (+3)"),
     ("home_undo",       "Desfazer Casa (−1)"),
     ("timer_toggle",    "Iniciar / Parar"),
     ("timer_reset",     "Reset Tempo"),
@@ -80,7 +80,7 @@ ACTIONS_RIGHT = [
     ("away_try",        "TRY Visitante (+5)"),
     ("away_penalty",    "Penal/Try Visit. (+7)"),
     ("away_conversion", "Conversão Visit. (+2)"),
-    ("away_drop",       "Drop Visitante (+3)"),
+    ("away_drop",       "Penal/Drop Visitante (+3)"),
     ("away_undo",       "Desfazer Visit. (−1)"),
     ("half_up",         "Próximo Tempo"),
     ("half_down",       "Tempo Anterior"),
@@ -159,7 +159,7 @@ class ScoreboardApp(QMainWindow):
 
         # Hotkey state
         self.hotkeys_enabled    = False
-        self._hotkeys_reverse:  dict[str, str] = {}   # "F1" -> "home_try"
+        self._hotkeys_reverse:  dict[str, str] = {}   
         self._hotkey_filter:    "_AppHotkeyFilter | None" = None
         self._keyboard_hooked   = False
         self._keyboard_handles: list = []             # handles da lib 'keyboard'
