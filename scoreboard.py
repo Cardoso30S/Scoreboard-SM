@@ -324,7 +324,7 @@ class ScoreboardApp(QMainWindow):
         panel.addLayout(row1)
 
         row2 = QHBoxLayout()
-        btn_drp  = QPushButton(f"DRP\n+{DROP_GOAL_POINTS}")
+        btn_drp  = QPushButton(f"PEN/DRP\n+{DROP_GOAL_POINTS}")
         btn_undo = QPushButton("−1")
         btn_drp.setObjectName("btnDrp")
         btn_undo.setObjectName("btnUndo")
