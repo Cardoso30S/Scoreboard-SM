@@ -155,6 +155,7 @@ class ScoreboardApp(QMainWindow):
         self.timer_minutes   = 40
         self.timer_seconds   = 0
         self.timer_direction = "countdown"  # "countdown" | "stopwatch"
+        self._stopwatch_target = (0, 0)     # (min, seg) — (0,0) = sem limite
 
         # Hotkey state
         self.hotkeys_enabled    = False
@@ -674,6 +675,16 @@ class ScoreboardApp(QMainWindow):
                 self.timer_seconds = 0
                 self.timer_minutes += 1
 
+            # Para automaticamente ao atingir o tempo alvo do preset
+            t_min, t_sec = self._stopwatch_target
+            if t_min > 0 and self.timer_minutes == t_min and self.timer_seconds == t_sec:
+                self._qt_timer.stop()
+                self.timer_running = False
+                self._btn_start.setText("▶  Iniciar")
+                self.status_bar.showMessage(
+                    f"⏱ Tempo encerrado! {t_min:02d}:{t_sec:02d}"
+                )
+
         self._refresh_clock_display()
         self._write_outputs()
 
@@ -691,6 +702,7 @@ class ScoreboardApp(QMainWindow):
         if not self.timer_running:
             self.timer_minutes = self._min_spin.value()
             self.timer_seconds = self._sec_spin.value()
+            self._stopwatch_target = (0, 0)  # edição manual cancela o alvo do preset
             self._refresh_clock_display()
             self._write_outputs()
 
@@ -736,6 +748,9 @@ class ScoreboardApp(QMainWindow):
         self._sec_spin.setValue(0)
         self._min_spin.blockSignals(False)
         self._sec_spin.blockSignals(False)
+
+        # Define o alvo: para automaticamente ao atingir este tempo
+        self._stopwatch_target = (minutes, 0)
 
         # Cronômetro sempre começa do zero
         self.timer_minutes = 0
