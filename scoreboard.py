@@ -34,7 +34,7 @@ DEFAULT_HOTKEYS: dict[str, str] = {
     "home_conversion": "Ctrl+E",
     "home_drop":       "Ctrl+R",
     "home_undo":       "Ctrl+T",
-    "timer_toggle":    "Ctrl+P",
+    "timer_toggle":    "Ctrl+B",
     "away_try":        "Ctrl+U",
     "away_penalty":    "Ctrl+I",
     "away_conversion": "Ctrl+O",
