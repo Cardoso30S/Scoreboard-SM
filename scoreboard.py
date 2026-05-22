@@ -4,6 +4,7 @@
 import sys
 import os
 import json
+import time
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -20,10 +21,10 @@ from PyQt6.QtGui import QFont, QKeySequence, QShortcut
 OUTPUT_DIR  = Path("Output")
 CONFIG_FILE = Path("hotkeys.json")
 
-TRY_POINTS        = 5
-CONVERSION_POINTS = 2
-PENALTY_POINTS    = 3
-DROP_GOAL_POINTS  = 3
+TRY_POINTS          = 5
+CONVERSION_POINTS   = 2
+PENALTY_TRY_POINTS  = 7   # Penal/Try — penal convertido em try (5+2)
+DROP_GOAL_POINTS    = 3
 
 HALF_NAMES = {1: "1º Tempo", 2: "2º Tempo", 3: "Prorrogação", 4: "Prorrogação 2"}
 
@@ -47,11 +48,11 @@ DEFAULT_HOTKEYS: dict[str, str] = {
 
 # Stream Deck 5×3 layout — (action_key, display_label, bg_color)
 DECK_LAYOUT: list[tuple[str, str, str]] = [
-    ("home_try",        "Home\nTRY +5",    "#1d6b2a"),
-    ("home_penalty",    "Home\nPEN +3",    "#1a3d7a"),
-    ("timer_toggle",    "START /\nSTOP",   "#4a4a5a"),
-    ("away_penalty",    "Away\nPEN +3",    "#1a3d7a"),
-    ("away_try",        "Away\nTRY +5",    "#1d6b2a"),
+    ("home_try",        "Home\nTRY +5",      "#1d6b2a"),
+    ("home_penalty",    "Home\nPEN/TRY +7", "#1a3d7a"),
+    ("timer_toggle",    "START /\nSTOP",    "#4a4a5a"),
+    ("away_penalty",    "Away\nPEN/TRY +7", "#1a3d7a"),
+    ("away_try",        "Away\nTRY +5",     "#1d6b2a"),
     ("home_conversion", "Home\nCNV +2",    "#7a5a1a"),
     ("home_drop",       "Home\nDRP +3",    "#5a1a7a"),
     ("timer_reset",     "RESET\nTEMPO",    "#4a2a00"),
@@ -67,7 +68,7 @@ DECK_LAYOUT: list[tuple[str, str, str]] = [
 # Ordered list for the editable table (left col | right col)
 ACTIONS_LEFT = [
     ("home_try",        "TRY Casa (+5)"),
-    ("home_penalty",    "Penal Casa (+3)"),
+    ("home_penalty",    "Penal/Try Casa (+7)"),
     ("home_conversion", "Conversão Casa (+2)"),
     ("home_drop",       "Drop Casa (+3)"),
     ("home_undo",       "Desfazer Casa (−1)"),
@@ -77,7 +78,7 @@ ACTIONS_LEFT = [
 ]
 ACTIONS_RIGHT = [
     ("away_try",        "TRY Visitante (+5)"),
-    ("away_penalty",    "Penal Visitante (+3)"),
+    ("away_penalty",    "Penal/Try Visit. (+7)"),
     ("away_conversion", "Conversão Visit. (+2)"),
     ("away_drop",       "Drop Visitante (+3)"),
     ("away_undo",       "Desfazer Visit. (−1)"),
@@ -110,6 +111,7 @@ class ScoreboardApp(QMainWindow):
         self._keyboard_hooked  = False
         self._keyboard_handles: list = []      # handles from 'keyboard' lib
         self._shortcuts:        list[QShortcut] = []  # Qt fallback shortcuts
+        self._last_toggle_time = 0.0           # debounce: evita double-fire do Space
 
         # UI widget refs (set in _build_*)
         self._deck_buttons: dict[str, QPushButton]     = {}
@@ -208,6 +210,9 @@ class ScoreboardApp(QMainWindow):
         self._btn_start.setMinimumWidth(120)
         self._btn_start.setFont(QFont("Arial", 13, QFont.Weight.Bold))
         self._btn_start.setObjectName("startButton")
+        # NoFocus impede que o botão capture Space pelo Qt ao ter foco,
+        # evitando double-fire junto com o hotkey global.
+        self._btn_start.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_start.clicked.connect(self._toggle_timer)
 
         btn_reset_score = QPushButton("Reset Placar")
@@ -249,7 +254,7 @@ class ScoreboardApp(QMainWindow):
         panel.addWidget(btn_try)
 
         row1 = QHBoxLayout()
-        btn_pen = QPushButton(f"PEN\n+{PENALTY_POINTS}")
+        btn_pen = QPushButton(f"PEN/TRY\n+{PENALTY_TRY_POINTS}")
         btn_cnv = QPushButton(f"CNV\n+{CONVERSION_POINTS}")
         btn_pen.setObjectName("btnPen")
         btn_cnv.setObjectName("btnCnv")
@@ -272,13 +277,13 @@ class ScoreboardApp(QMainWindow):
 
         if side == "home":
             btn_try.clicked.connect(lambda: self._add_score("home", TRY_POINTS))
-            btn_pen.clicked.connect(lambda: self._add_score("home", PENALTY_POINTS))
+            btn_pen.clicked.connect(lambda: self._add_score("home", PENALTY_TRY_POINTS))
             btn_cnv.clicked.connect(lambda: self._add_score("home", CONVERSION_POINTS))
             btn_drp.clicked.connect(lambda: self._add_score("home", DROP_GOAL_POINTS))
             btn_undo.clicked.connect(lambda: self._add_score("home", -1))
         else:
             btn_try.clicked.connect(lambda: self._add_score("away", TRY_POINTS))
-            btn_pen.clicked.connect(lambda: self._add_score("away", PENALTY_POINTS))
+            btn_pen.clicked.connect(lambda: self._add_score("away", PENALTY_TRY_POINTS))
             btn_cnv.clicked.connect(lambda: self._add_score("away", CONVERSION_POINTS))
             btn_drp.clicked.connect(lambda: self._add_score("away", DROP_GOAL_POINTS))
             btn_undo.clicked.connect(lambda: self._add_score("away", -1))
@@ -525,7 +530,7 @@ class ScoreboardApp(QMainWindow):
             self._away_score_label.setText(str(self.away_score))
         action_name = {
             TRY_POINTS: "TRY", CONVERSION_POINTS: "Conversão",
-            PENALTY_POINTS: "Penal", DROP_GOAL_POINTS: "Drop", -1: "Desfazer",
+            PENALTY_TRY_POINTS: "Penal/Try", DROP_GOAL_POINTS: "Drop", -1: "Desfazer",
         }.get(points, f"+{points}")
         team = self.home_name if side == "home" else self.away_name
         self.status_bar.showMessage(
@@ -566,6 +571,14 @@ class ScoreboardApp(QMainWindow):
     # ── Logic: Timer ──────────────────────────────────────────────────────────
 
     def _toggle_timer(self) -> None:
+        # Debounce: ignora chamadas repetidas em menos de 400 ms.
+        # Isso evita o key-repeat do teclado e o double-fire quando o botão
+        # tem foco e recebe Space ao mesmo tempo que o hotkey global.
+        now = time.monotonic()
+        if now - self._last_toggle_time < 0.4:
+            return
+        self._last_toggle_time = now
+
         if self.timer_running:
             self._qt_timer.stop()
             self.timer_running = False
