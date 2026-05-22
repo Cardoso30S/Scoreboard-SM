@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QRadioButton, QMessageBox, QKeySequenceEdit,
     QSizePolicy, QStatusBar,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QObject, QEvent
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -87,6 +87,56 @@ ACTIONS_RIGHT = [
 ]
 
 
+# ── Application-level hotkey filter ───────────────────────────────────────────
+class _AppHotkeyFilter(QObject):
+    """Intercepta key-press no nível do QApplication para executar hotkeys.
+
+    Vantagens sobre QShortcut / keyboard lib:
+    - Funciona em qualquer aba/widget enquanto a janela estiver ativa
+    - Nunca dispara quando um campo de texto (QLineEdit, QSpinBox…) está focado
+    - Consome o evento para que ele não vaze para botões ou inputs
+    """
+
+    _INPUT_TYPES = (QLineEdit, QSpinBox, QKeySequenceEdit)
+
+    # Modificadores que importam (ignora Keypad, GroupSwitch, etc.)
+    _MOD_MASK = (
+        Qt.KeyboardModifier.ShiftModifier
+        | Qt.KeyboardModifier.ControlModifier
+        | Qt.KeyboardModifier.AltModifier
+        | Qt.KeyboardModifier.MetaModifier
+    )
+
+    def __init__(self, scoreboard: "ScoreboardApp", parent=None) -> None:
+        super().__init__(parent)
+        self._sb = scoreboard
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() != QEvent.Type.KeyPress:
+            return False
+        if not self._sb.hotkeys_enabled:
+            return False
+
+        # Nunca intercepta quando input de texto tem foco
+        fw = QApplication.focusWidget()
+        if isinstance(fw, self._INPUT_TYPES):
+            return False
+
+        # Monta a string portátil da tecla pressionada
+        mods     = event.modifiers() & self._MOD_MASK
+        combined = int(event.key()) | mods.value  # .value converte Flag → int no PyQt6
+        key_str  = QKeySequence(combined).toString(QKeySequence.SequenceFormat.PortableText)
+
+        action = self._sb._hotkeys_reverse.get(key_str)
+        if action:
+            fn = self._sb._action_map().get(action)
+            if fn:
+                fn()
+                return True  # consome o evento — não vaza para botões/inputs
+
+        return False
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 class ScoreboardApp(QMainWindow):
 
@@ -107,11 +157,12 @@ class ScoreboardApp(QMainWindow):
         self.timer_direction = "countdown"  # "countdown" | "stopwatch"
 
         # Hotkey state
-        self.hotkeys_enabled   = False
-        self._keyboard_hooked  = False
-        self._keyboard_handles: list = []      # handles from 'keyboard' lib
-        self._shortcuts:        list[QShortcut] = []  # Qt fallback shortcuts
-        self._last_toggle_time = 0.0           # debounce: evita double-fire do Space
+        self.hotkeys_enabled    = False
+        self._hotkeys_reverse:  dict[str, str] = {}   # "F1" -> "home_try"
+        self._hotkey_filter:    "_AppHotkeyFilter | None" = None
+        self._keyboard_hooked   = False
+        self._keyboard_handles: list = []             # handles da lib 'keyboard'
+        self._last_toggle_time  = 0.0                 # debounce do Space
 
         # UI widget refs (set in _build_*)
         self._deck_buttons: dict[str, QPushButton]     = {}
@@ -506,7 +557,8 @@ class ScoreboardApp(QMainWindow):
         self._update_deck_button(action)
         self._save_hotkeys()
         if self.hotkeys_enabled:
-            self._register_hotkeys()
+            self._build_hotkeys_reverse()   # atualiza mapa reverso imediatamente
+            self._register_hotkeys()        # atualiza também a lib keyboard
 
     def _update_deck_button(self, action: str) -> None:
         btn = self._deck_buttons.get(action)
@@ -529,6 +581,7 @@ class ScoreboardApp(QMainWindow):
         self._update_all_deck_buttons()
         self._save_hotkeys()
         if self.hotkeys_enabled:
+            self._build_hotkeys_reverse()
             self._register_hotkeys()
         self.status_bar.showMessage("Hotkeys restaurados para o padrão")
 
@@ -709,12 +762,12 @@ class ScoreboardApp(QMainWindow):
     def _action_map(self) -> dict:
         return {
             "home_try":        lambda: self._add_score("home", TRY_POINTS),
-            "home_penalty":    lambda: self._add_score("home", PENALTY_POINTS),
+            "home_penalty":    lambda: self._add_score("home", PENALTY_TRY_POINTS),
             "home_conversion": lambda: self._add_score("home", CONVERSION_POINTS),
             "home_drop":       lambda: self._add_score("home", DROP_GOAL_POINTS),
             "home_undo":       lambda: self._add_score("home", -1),
             "away_try":        lambda: self._add_score("away", TRY_POINTS),
-            "away_penalty":    lambda: self._add_score("away", PENALTY_POINTS),
+            "away_penalty":    lambda: self._add_score("away", PENALTY_TRY_POINTS),
             "away_conversion": lambda: self._add_score("away", CONVERSION_POINTS),
             "away_drop":       lambda: self._add_score("away", DROP_GOAL_POINTS),
             "away_undo":       lambda: self._add_score("away", -1),
@@ -725,12 +778,25 @@ class ScoreboardApp(QMainWindow):
             "half_down":       lambda: self._change_half(-1),
         }
 
+    def _build_hotkeys_reverse(self) -> None:
+        """Reconstrói o mapa reverso {key_str -> action} a partir de self.hotkeys."""
+        self._hotkeys_reverse = {v: k for k, v in self.hotkeys.items() if v}
+
     def _register_hotkeys(self) -> None:
-        # ── Try global 'keyboard' library first ───────────────────────────────
+        # Mapa reverso para o filtro de eventos
+        self._build_hotkeys_reverse()
+
+        # ── Filtro Qt (primário) — funciona sempre que a janela está ativa ──────
+        if self._hotkey_filter is None:
+            self._hotkey_filter = _AppHotkeyFilter(self)
+            QApplication.instance().installEventFilter(self._hotkey_filter)
+
+        msg = "✓ Hotkeys ativados (janela focada)"
+
+        # ── Biblioteca 'keyboard' (secundária) — funciona em background ─────────
         try:
             import keyboard as kb
 
-            # Remove previously registered handles individually (avoids unhook_all bug)
             for handle in self._keyboard_handles:
                 try:
                     kb.remove_hotkey(handle)
@@ -744,43 +810,28 @@ class ScoreboardApp(QMainWindow):
                     continue
                 kb_key = self._qt_key_to_kb(key_str)
                 try:
-                    # Executa no thread Qt e bloqueia se um campo de texto estiver focado
                     safe_cb = self._make_kb_callback(callback)
-                    handle = kb.add_hotkey(kb_key, safe_cb)
+                    handle  = kb.add_hotkey(kb_key, safe_cb)
                     self._keyboard_handles.append(handle)
                 except Exception:
-                    pass  # skip invalid/unsupported combos silently
+                    pass
 
             self._keyboard_hooked = True
-            self.status_bar.showMessage("✓ Hotkeys globais ativados (biblioteca 'keyboard')")
-            return
-
+            msg = "✓ Hotkeys ativados (janela focada + background)"
         except ImportError:
             pass
-        except Exception as exc:
-            self.status_bar.showMessage(f"'keyboard' indisponível — usando Qt shortcuts. ({exc})")
+        except Exception:
+            pass
 
-        # ── Fallback: Qt shortcuts (focused window only) ───────────────────────
-        self._register_qt_shortcuts()
-        self.status_bar.showMessage("✓ Hotkeys Qt ativados (funcionam com a janela focada)")
-
-    def _register_qt_shortcuts(self) -> None:
-        for sc in self._shortcuts:
-            sc.setEnabled(False)
-        self._shortcuts.clear()
-
-        for action, callback in self._action_map().items():
-            key_str = self.hotkeys.get(action, "")
-            if not key_str:
-                continue
-            try:
-                sc = QShortcut(QKeySequence(key_str), self)
-                sc.activated.connect(callback)
-                self._shortcuts.append(sc)
-            except Exception:
-                pass
+        self.status_bar.showMessage(msg)
 
     def _unregister_hotkeys(self) -> None:
+        # Remove filtro Qt
+        if self._hotkey_filter is not None:
+            QApplication.instance().removeEventFilter(self._hotkey_filter)
+            self._hotkey_filter = None
+
+        # Remove handles da lib 'keyboard'
         if self._keyboard_hooked:
             try:
                 import keyboard as kb
@@ -794,25 +845,19 @@ class ScoreboardApp(QMainWindow):
                 pass
             self._keyboard_hooked = False
 
-        for sc in self._shortcuts:
-            sc.setEnabled(False)
-        self._shortcuts.clear()
-
-        self.hotkeys_enabled = False
+        self._hotkeys_reverse = {}
+        self.hotkeys_enabled  = False
         self.status_bar.showMessage("Hotkeys desativados")
 
-    def _no_input_focused(self) -> bool:
-        """Retorna True se nenhum campo de texto tem foco."""
-        from PyQt6.QtWidgets import QApplication as _App
-        fw = _App.focusWidget()
-        return not isinstance(fw, (QLineEdit, QSpinBox, QKeySequenceEdit))
-
     def _make_kb_callback(self, fn):
-        """Envolve fn para rodar no thread Qt apenas quando nenhum input tem foco."""
+        """Para a lib 'keyboard': executa fn no thread Qt, ignora se input tem foco."""
         def cb():
-            # keyboard lib chama isso em thread separado; usa singleShot para ir ao Qt
             QTimer.singleShot(0, lambda: fn() if self._no_input_focused() else None)
         return cb
+
+    def _no_input_focused(self) -> bool:
+        fw = QApplication.focusWidget()
+        return not isinstance(fw, (QLineEdit, QSpinBox, QKeySequenceEdit))
 
     @staticmethod
     def _qt_key_to_kb(qt_key: str) -> str:
