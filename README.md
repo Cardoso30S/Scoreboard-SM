@@ -2,13 +2,33 @@
 
 Placar digital para Rugby com suporte a Stream Deck.
 
-## Requisitos
+## Gerar executável (distribuir sem instalar Python)
+
+> O executável precisa ser compilado **no mesmo sistema operacional** onde vai rodar.
+> Para `.exe` no Windows, execute os comandos abaixo no Windows.
+
+```bash
+pip install pyinstaller
+python build.py
+```
+
+O arquivo gerado fica em `dist/Rugby Scoreboard` (Linux/Mac) ou `dist/Rugby Scoreboard.exe` (Windows).
+Basta enviar esse único arquivo para o seu amigo — nenhuma instalação adicional é necessária.
+
+**Observação Windows:** a biblioteca de hotkeys globais (`keyboard`) requer que o app seja executado
+como **Administrador** para capturar teclas com a janela minimizada.
+
+---
+
+## Desenvolvimento — executar pelo Python
+
+### Requisitos
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Executar
+### Executar
 
 ```bash
 python scoreboard.py
