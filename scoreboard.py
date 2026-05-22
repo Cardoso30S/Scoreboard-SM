@@ -10,15 +10,15 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget,
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QLineEdit, QSpinBox, QCheckBox,
-    QGroupBox, QRadioButton, QMessageBox, QFrame,
+    QGroupBox, QRadioButton, QMessageBox, QKeySequenceEdit,
     QSizePolicy, QStatusBar,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-OUTPUT_DIR   = Path("Output")
-CONFIG_FILE  = Path("hotkeys.json")
+OUTPUT_DIR  = Path("Output")
+CONFIG_FILE = Path("hotkeys.json")
 
 TRY_POINTS        = 5
 CONVERSION_POINTS = 2
@@ -64,6 +64,27 @@ DECK_LAYOUT: list[tuple[str, str, str]] = [
     ("away_undo",       "Away\n−1",        "#7a1a1a"),
 ]
 
+# Ordered list for the editable table (left col | right col)
+ACTIONS_LEFT = [
+    ("home_try",        "TRY Casa (+5)"),
+    ("home_penalty",    "Penal Casa (+3)"),
+    ("home_conversion", "Conversão Casa (+2)"),
+    ("home_drop",       "Drop Casa (+3)"),
+    ("home_undo",       "Desfazer Casa (−1)"),
+    ("timer_toggle",    "Iniciar / Parar"),
+    ("timer_reset",     "Reset Tempo"),
+    ("score_reset",     "Reset Placar"),
+]
+ACTIONS_RIGHT = [
+    ("away_try",        "TRY Visitante (+5)"),
+    ("away_penalty",    "Penal Visitante (+3)"),
+    ("away_conversion", "Conversão Visit. (+2)"),
+    ("away_drop",       "Drop Visitante (+3)"),
+    ("away_undo",       "Desfazer Visit. (−1)"),
+    ("half_up",         "Próximo Tempo"),
+    ("half_down",       "Tempo Anterior"),
+]
+
 
 # ── Main Window ────────────────────────────────────────────────────────────────
 class ScoreboardApp(QMainWindow):
@@ -71,32 +92,36 @@ class ScoreboardApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        # State
+        # Game state
         self.home_score  = 0
         self.away_score  = 0
         self.half        = 1
         self.home_name   = "Casa"
         self.away_name   = "Visitante"
 
+        # Timer state
         self.timer_running   = False
         self.timer_minutes   = 40
         self.timer_seconds   = 0
-        self.timer_direction = "countdown"   # "countdown" | "stopwatch"
+        self.timer_direction = "countdown"  # "countdown" | "stopwatch"
 
-        self.hotkeys_enabled  = False
-        self._keyboard_hooked = False
-        self._shortcuts: list[QShortcut] = []
+        # Hotkey state
+        self.hotkeys_enabled   = False
+        self._keyboard_hooked  = False
+        self._keyboard_handles: list = []      # handles from 'keyboard' lib
+        self._shortcuts:        list[QShortcut] = []  # Qt fallback shortcuts
 
-        # Load saved hotkey config
+        # UI widget refs (set in _build_*)
+        self._deck_buttons: dict[str, QPushButton]     = {}
+        self._key_editors:  dict[str, QKeySequenceEdit] = {}
+
         self.hotkeys = self._load_hotkeys()
 
-        # Qt timer (1-second tick)
         self._qt_timer = QTimer(self)
         self._qt_timer.setInterval(1000)
         self._qt_timer.timeout.connect(self._tick)
 
         OUTPUT_DIR.mkdir(exist_ok=True)
-
         self._build_ui()
         self._apply_theme()
         self._refresh_clock_display()
@@ -106,7 +131,7 @@ class ScoreboardApp(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Rugby Scoreboard 1.0")
-        self.setMinimumSize(700, 520)
+        self.setMinimumSize(720, 540)
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -139,7 +164,7 @@ class ScoreboardApp(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # Team name inputs
+        # Team names
         names_row = QHBoxLayout()
         self._home_name_input = QLineEdit("Casa")
         self._home_name_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -160,7 +185,7 @@ class ScoreboardApp(QMainWindow):
         names_row.addWidget(self._away_name_input)
         layout.addLayout(names_row)
 
-        # Main area: Home | Clock | Away
+        # Main area
         main_area = QHBoxLayout()
         main_area.setSpacing(12)
         main_area.addLayout(self._build_team_panel("home"), stretch=2)
@@ -168,7 +193,7 @@ class ScoreboardApp(QMainWindow):
         main_area.addLayout(self._build_team_panel("away"), stretch=2)
         layout.addLayout(main_area)
 
-        # Bottom action bar
+        # Bottom bar
         bar = QHBoxLayout()
         bar.setSpacing(6)
 
@@ -217,14 +242,12 @@ class ScoreboardApp(QMainWindow):
             self._away_score_label = score
         panel.addWidget(score)
 
-        # TRY button (biggest, most prominent)
         btn_try = QPushButton(f"TRY  +{TRY_POINTS}")
         btn_try.setMinimumHeight(44)
         btn_try.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         btn_try.setObjectName("btnTry")
         panel.addWidget(btn_try)
 
-        # PEN | CNV row
         row1 = QHBoxLayout()
         btn_pen = QPushButton(f"PEN\n+{PENALTY_POINTS}")
         btn_cnv = QPushButton(f"CNV\n+{CONVERSION_POINTS}")
@@ -236,7 +259,6 @@ class ScoreboardApp(QMainWindow):
         row1.addWidget(btn_cnv)
         panel.addLayout(row1)
 
-        # DRP | -1 row
         row2 = QHBoxLayout()
         btn_drp  = QPushButton(f"DRP\n+{DROP_GOAL_POINTS}")
         btn_undo = QPushButton("−1")
@@ -248,7 +270,6 @@ class ScoreboardApp(QMainWindow):
         row2.addWidget(btn_undo)
         panel.addLayout(row2)
 
-        # Wire clicks
         if side == "home":
             btn_try.clicked.connect(lambda: self._add_score("home", TRY_POINTS))
             btn_pen.clicked.connect(lambda: self._add_score("home", PENALTY_POINTS))
@@ -269,14 +290,12 @@ class ScoreboardApp(QMainWindow):
         panel.setSpacing(8)
         panel.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Clock
         self._clock_label = QLabel("40:00")
         self._clock_label.setFont(QFont("Arial", 42, QFont.Weight.Bold))
         self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._clock_label.setObjectName("clockLabel")
         panel.addWidget(self._clock_label)
 
-        # Half controls
         half_row = QHBoxLayout()
         btn_half_down = QPushButton("▽")
         btn_half_down.setFixedSize(36, 36)
@@ -298,7 +317,6 @@ class ScoreboardApp(QMainWindow):
         half_row.addWidget(btn_half_up)
         panel.addLayout(half_row)
 
-        # Timer set
         timer_group = QGroupBox("Configurar Tempo")
         timer_grid = QGridLayout(timer_group)
         timer_grid.setSpacing(6)
@@ -327,12 +345,10 @@ class ScoreboardApp(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # Always on top
         self._always_top_cb = QCheckBox("Sempre visível (Always on Top)")
         self._always_top_cb.toggled.connect(self._toggle_always_on_top)
         layout.addWidget(self._always_top_cb)
 
-        # Timer mode
         mode_group = QGroupBox("Modo do Cronômetro")
         mode_layout = QVBoxLayout(mode_group)
         self._countdown_rb = QRadioButton("Contagem regressiva — padrão Rugby (ex: 40:00 → 00:00)")
@@ -343,7 +359,6 @@ class ScoreboardApp(QMainWindow):
         mode_layout.addWidget(self._stopwatch_rb)
         layout.addWidget(mode_group)
 
-        # Presets
         preset_group = QGroupBox("Presets de Duração do Tempo")
         preset_row = QHBoxLayout(preset_group)
         for label, mins in [("10 min", 10), ("20 min", 20), ("40 min", 40), ("80 min (Jogo)", 80)]:
@@ -353,7 +368,6 @@ class ScoreboardApp(QMainWindow):
             preset_row.addWidget(btn)
         layout.addWidget(preset_group)
 
-        # OBS output info
         obs_group = QGroupBox("Saída para OBS (arquivos de texto)")
         obs_layout = QVBoxLayout(obs_group)
         obs_layout.addWidget(QLabel(f"Arquivos gravados em: ./{OUTPUT_DIR}/"))
@@ -362,38 +376,35 @@ class ScoreboardApp(QMainWindow):
             obs_layout.addWidget(QLabel(f"    • {name}"))
         obs_layout.addWidget(QLabel(""))
         obs_layout.addWidget(QLabel(
-            "No OBS: adicione fonte de texto → arquivo de texto → aponte para o arquivo desejado."
+            "No OBS: Adicionar fonte → Texto → Ler de arquivo → selecione o .txt desejado."
         ))
         layout.addWidget(obs_group)
-
         layout.addStretch()
 
     # ── Hotkeys tab ────────────────────────────────────────────────────────────
 
     def _build_hotkeys_tab(self) -> None:
         layout = QVBoxLayout(self._tab_hotkeys)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(8)
 
         # Enable toggle
-        enable_row = QHBoxLayout()
         self._hotkeys_cb = QCheckBox(
-            "Ativar Hotkeys  (funciona mesmo com a janela em segundo plano — requer pacote 'keyboard')"
+            "Ativar Hotkeys  "
+            "(funciona em background com 'keyboard';  fallback Qt quando app está focado)"
         )
         self._hotkeys_cb.toggled.connect(self._toggle_hotkeys)
-        enable_row.addWidget(self._hotkeys_cb)
-        layout.addLayout(enable_row)
+        layout.addWidget(self._hotkeys_cb)
 
-        # Stream Deck visual layout
+        # ── Stream Deck visual grid ────────────────────────────────────────────
         deck_group = QGroupBox("Layout do Stream Deck — Rise Mode Vision 02  (15 teclas, 5×3)")
         deck_grid = QGridLayout(deck_group)
         deck_grid.setSpacing(4)
 
-        self._deck_buttons: dict[str, QPushButton] = {}
         for idx, (action, display, color) in enumerate(DECK_LAYOUT):
-            key = self.hotkeys.get(action, DEFAULT_HOTKEYS.get(action, ""))
+            key = self.hotkeys.get(action, "")
             btn = QPushButton(f"{key}\n{display}")
-            btn.setFixedSize(118, 68)
+            btn.setFixedSize(120, 66)
             btn.setStyleSheet(
                 f"background-color:{color}; color:#ffffff; "
                 f"font-size:10px; font-weight:bold; border-radius:6px;"
@@ -405,74 +416,103 @@ class ScoreboardApp(QMainWindow):
 
         layout.addWidget(deck_group)
 
-        # Hotkey mapping table
-        table_group = QGroupBox("Mapeamento completo de teclas")
-        table_layout = QGridLayout(table_group)
-        table_layout.setSpacing(6)
+        # ── Editable hotkey table ──────────────────────────────────────────────
+        edit_group = QGroupBox(
+            "Editar Hotkeys — clique no campo e pressione a combinação desejada  "
+            "(ex: Ctrl+F,  Shift+P,  F11…)"
+        )
+        edit_grid = QGridLayout(edit_group)
+        edit_grid.setSpacing(5)
+        edit_grid.setColumnStretch(1, 1)
+        edit_grid.setColumnStretch(3, 0)   # gap
+        edit_grid.setColumnStretch(4, 1)
+        edit_grid.setColumnStretch(5, 1)
 
-        headers = ["Ação", "Tecla (Stream Deck)", "Ação", "Tecla (Stream Deck)"]
-        for col, h in enumerate(headers):
-            lbl = QLabel(f"<b>{h}</b>")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            table_layout.addWidget(lbl, 0, col)
+        # Header
+        for col, txt in [(0, "Ação"), (1, "Tecla"), (4, "Ação"), (5, "Tecla")]:
+            h = QLabel(f"<b>{txt}</b>")
+            h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            edit_grid.addWidget(h, 0, col)
 
-        rows = [
-            ("home_try",        "TRY Casa (+5)"),
-            ("home_penalty",    "Penal Casa (+3)"),
-            ("home_conversion", "Conversão Casa (+2)"),
-            ("home_drop",       "Drop Casa (+3)"),
-            ("home_undo",       "Desfazer Casa (−1)"),
-            ("timer_toggle",    "Iniciar / Parar Tempo"),
-            ("timer_reset",     "Reset Tempo"),
-            ("score_reset",     "Reset Placar"),
-        ]
-        rows_right = [
-            ("away_try",        "TRY Visitante (+5)"),
-            ("away_penalty",    "Penal Visitante (+3)"),
-            ("away_conversion", "Conversão Visitante (+2)"),
-            ("away_drop",       "Drop Visitante (+3)"),
-            ("away_undo",       "Desfazer Visitante (−1)"),
-            ("half_up",         "Próximo Tempo"),
-            ("half_down",       "Tempo Anterior"),
-        ]
+        for row, (action, label) in enumerate(ACTIONS_LEFT, start=1):
+            lbl = QLabel(label)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            edit_grid.addWidget(lbl, row, 0)
 
-        self._hotkey_labels: dict[str, QLabel] = {}
+            editor = QKeySequenceEdit(QKeySequence(self.hotkeys.get(action, "")))
+            editor.keySequenceChanged.connect(
+                lambda seq, a=action: self._on_hotkey_changed(a, seq)
+            )
+            self._key_editors[action] = editor
+            edit_grid.addWidget(editor, row, 1)
 
-        for r, ((ak, al), (bk, bl)) in enumerate(
-            zip(rows, rows_right + [("", "")]), start=1
-        ):
-            lbl_al = QLabel(al); lbl_al.setAlignment(Qt.AlignmentFlag.AlignRight)
-            table_layout.addWidget(lbl_al, r, 0)
+        for row, (action, label) in enumerate(ACTIONS_RIGHT, start=1):
+            lbl = QLabel(label)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            edit_grid.addWidget(lbl, row, 4)
 
-            key_a = QLabel(f"<b>{self.hotkeys.get(ak, '')}</b>")
-            key_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            key_a.setObjectName(f"key_{ak}")
-            table_layout.addWidget(key_a, r, 1)
-            if ak:
-                self._hotkey_labels[ak] = key_a
+            editor = QKeySequenceEdit(QKeySequence(self.hotkeys.get(action, "")))
+            editor.keySequenceChanged.connect(
+                lambda seq, a=action: self._on_hotkey_changed(a, seq)
+            )
+            self._key_editors[action] = editor
+            edit_grid.addWidget(editor, row, 5)
 
-            if bk:
-                lbl_bl = QLabel(bl); lbl_bl.setAlignment(Qt.AlignmentFlag.AlignRight)
-                table_layout.addWidget(lbl_bl, r, 2)
+        layout.addWidget(edit_group)
 
-                key_b = QLabel(f"<b>{self.hotkeys.get(bk, '')}</b>")
-                key_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                table_layout.addWidget(key_b, r, 3)
-                self._hotkey_labels[bk] = key_b
-
-        layout.addWidget(table_group)
+        # Restore defaults button
+        btn_defaults = QPushButton("↺  Restaurar Padrões")
+        btn_defaults.setMaximumWidth(200)
+        btn_defaults.clicked.connect(self._reset_hotkeys_to_defaults)
+        layout.addWidget(btn_defaults, alignment=Qt.AlignmentFlag.AlignRight)
 
         # Instructions
         info = QLabel(
             "<b>Como configurar o Stream Deck:</b><br>"
-            "1. Abra o software do Stream Deck → crie um novo perfil<br>"
-            "2. Para cada tecla: adicione ação <i>Tecla de Atalho</i> e atribua o atalho mostrado acima<br>"
-            "3. Ative os hotkeys nesta tela (caixa acima) — instale o pacote: <code>pip install keyboard</code><br>"
-            "4. O Stream Deck envia o atalho → este app recebe → placar/tempo atualiza automaticamente"
+            "1. Edite os hotkeys acima — clique no campo e pressione a combinação (ex: Ctrl+F, Shift+P)<br>"
+            "2. No software do Stream Deck: crie perfil 'Rugby' → para cada tecla adicione "
+            "ação <i>Tecla de Atalho</i> com o atalho escolhido acima<br>"
+            "3. Ative os hotkeys (caixa acima) — para funcionar em background instale: "
+            "<code>pip install keyboard</code><br>"
+            "4. Stream Deck envia o atalho → app recebe → placar/tempo atualiza automaticamente"
         )
         info.setWordWrap(True)
         layout.addWidget(info)
         layout.addStretch()
+
+    # ── Hotkey change handlers ─────────────────────────────────────────────────
+
+    def _on_hotkey_changed(self, action: str, seq: QKeySequence) -> None:
+        key_str = seq.toString(QKeySequence.SequenceFormat.PortableText)
+        self.hotkeys[action] = key_str
+        self._update_deck_button(action)
+        self._save_hotkeys()
+        if self.hotkeys_enabled:
+            self._register_hotkeys()
+
+    def _update_deck_button(self, action: str) -> None:
+        btn = self._deck_buttons.get(action)
+        if btn is None:
+            return
+        display = next((d for a, d, _ in DECK_LAYOUT if a == action), action)
+        key = self.hotkeys.get(action, "")
+        btn.setText(f"{key}\n{display}")
+
+    def _update_all_deck_buttons(self) -> None:
+        for action in self._deck_buttons:
+            self._update_deck_button(action)
+
+    def _reset_hotkeys_to_defaults(self) -> None:
+        self.hotkeys = dict(DEFAULT_HOTKEYS)
+        for action, editor in self._key_editors.items():
+            editor.blockSignals(True)
+            editor.setKeySequence(QKeySequence(self.hotkeys.get(action, "")))
+            editor.blockSignals(False)
+        self._update_all_deck_buttons()
+        self._save_hotkeys()
+        if self.hotkeys_enabled:
+            self._register_hotkeys()
+        self.status_bar.showMessage("Hotkeys restaurados para o padrão")
 
     # ── Logic: Scoring ─────────────────────────────────────────────────────────
 
@@ -483,15 +523,14 @@ class ScoreboardApp(QMainWindow):
         else:
             self.away_score = max(0, self.away_score + points)
             self._away_score_label.setText(str(self.away_score))
-        action = {
-            TRY_POINTS: "TRY",
-            CONVERSION_POINTS: "Conversão",
-            PENALTY_POINTS: "Penal",
-            DROP_GOAL_POINTS: "Drop",
-            -1: "Desfazer",
+        action_name = {
+            TRY_POINTS: "TRY", CONVERSION_POINTS: "Conversão",
+            PENALTY_POINTS: "Penal", DROP_GOAL_POINTS: "Drop", -1: "Desfazer",
         }.get(points, f"+{points}")
         team = self.home_name if side == "home" else self.away_name
-        self.status_bar.showMessage(f"{team}: {action}  →  {self.home_score} × {self.away_score}")
+        self.status_bar.showMessage(
+            f"{team}: {action_name}  →  {self.home_score} × {self.away_score}"
+        )
         self._write_outputs()
 
     def _reset_score(self) -> None:
@@ -600,69 +639,14 @@ class ScoreboardApp(QMainWindow):
     # ── Logic: Hotkeys ─────────────────────────────────────────────────────────
 
     def _toggle_hotkeys(self, enabled: bool) -> None:
+        self.hotkeys_enabled = enabled
         if enabled:
             self._register_hotkeys()
         else:
             self._unregister_hotkeys()
 
-    def _register_hotkeys(self) -> None:
-        # Primary: try 'keyboard' library (global — works with Stream Deck)
-        try:
-            import keyboard as kb
-
-            mapping = {
-                "home_try":        lambda: self._add_score("home", TRY_POINTS),
-                "home_penalty":    lambda: self._add_score("home", PENALTY_POINTS),
-                "home_conversion": lambda: self._add_score("home", CONVERSION_POINTS),
-                "home_drop":       lambda: self._add_score("home", DROP_GOAL_POINTS),
-                "home_undo":       lambda: self._add_score("home", -1),
-                "away_try":        lambda: self._add_score("away", TRY_POINTS),
-                "away_penalty":    lambda: self._add_score("away", PENALTY_POINTS),
-                "away_conversion": lambda: self._add_score("away", CONVERSION_POINTS),
-                "away_drop":       lambda: self._add_score("away", DROP_GOAL_POINTS),
-                "away_undo":       lambda: self._add_score("away", -1),
-                "timer_toggle":    self._toggle_timer,
-                "timer_reset":     self._reset_timer,
-                "score_reset":     self._reset_score,
-                "half_up":         lambda: self._change_half(1),
-                "half_down":       lambda: self._change_half(-1),
-            }
-
-            kb.unhook_all_hotkeys()
-            for action, callback in mapping.items():
-                key_str = self.hotkeys.get(action, DEFAULT_HOTKEYS.get(action, ""))
-                if key_str:
-                    kb.add_hotkey(key_str.lower(), callback)
-
-            self._keyboard_hooked = True
-            self.status_bar.showMessage("Hotkeys globais ativados (biblioteca 'keyboard')")
-            return
-        except ImportError:
-            pass
-        except Exception as exc:
-            QMessageBox.warning(
-                self, "Hotkeys",
-                f"Erro ao usar biblioteca 'keyboard': {exc}\n"
-                "Usando hotkeys Qt (funcionam apenas com a janela focada)."
-            )
-
-        # Fallback: Qt shortcuts (only while window is focused)
-        self._register_qt_shortcuts()
-        self.status_bar.showMessage("Hotkeys Qt ativados (apenas com janela focada)")
-
-    def _register_qt_shortcuts(self) -> None:
-        for sc in self._shortcuts:
-            sc.setEnabled(False)
-        self._shortcuts.clear()
-
-        def add(key_str: str, callback) -> None:
-            if not key_str:
-                return
-            sc = QShortcut(QKeySequence(key_str), self)
-            sc.activated.connect(callback)
-            self._shortcuts.append(sc)
-
-        mapping = {
+    def _action_map(self) -> dict:
+        return {
             "home_try":        lambda: self._add_score("home", TRY_POINTS),
             "home_penalty":    lambda: self._add_score("home", PENALTY_POINTS),
             "home_conversion": lambda: self._add_score("home", CONVERSION_POINTS),
@@ -679,14 +663,70 @@ class ScoreboardApp(QMainWindow):
             "half_up":         lambda: self._change_half(1),
             "half_down":       lambda: self._change_half(-1),
         }
-        for action, cb in mapping.items():
-            add(self.hotkeys.get(action, DEFAULT_HOTKEYS.get(action, "")), cb)
+
+    def _register_hotkeys(self) -> None:
+        # ── Try global 'keyboard' library first ───────────────────────────────
+        try:
+            import keyboard as kb
+
+            # Remove previously registered handles individually (avoids unhook_all bug)
+            for handle in self._keyboard_handles:
+                try:
+                    kb.remove_hotkey(handle)
+                except Exception:
+                    pass
+            self._keyboard_handles.clear()
+
+            for action, callback in self._action_map().items():
+                key_str = self.hotkeys.get(action, "")
+                if not key_str:
+                    continue
+                kb_key = self._qt_key_to_kb(key_str)
+                try:
+                    handle = kb.add_hotkey(kb_key, callback)
+                    self._keyboard_handles.append(handle)
+                except Exception:
+                    pass  # skip invalid/unsupported combos silently
+
+            self._keyboard_hooked = True
+            self.status_bar.showMessage("✓ Hotkeys globais ativados (biblioteca 'keyboard')")
+            return
+
+        except ImportError:
+            pass
+        except Exception as exc:
+            self.status_bar.showMessage(f"'keyboard' indisponível — usando Qt shortcuts. ({exc})")
+
+        # ── Fallback: Qt shortcuts (focused window only) ───────────────────────
+        self._register_qt_shortcuts()
+        self.status_bar.showMessage("✓ Hotkeys Qt ativados (funcionam com a janela focada)")
+
+    def _register_qt_shortcuts(self) -> None:
+        for sc in self._shortcuts:
+            sc.setEnabled(False)
+        self._shortcuts.clear()
+
+        for action, callback in self._action_map().items():
+            key_str = self.hotkeys.get(action, "")
+            if not key_str:
+                continue
+            try:
+                sc = QShortcut(QKeySequence(key_str), self)
+                sc.activated.connect(callback)
+                self._shortcuts.append(sc)
+            except Exception:
+                pass
 
     def _unregister_hotkeys(self) -> None:
         if self._keyboard_hooked:
             try:
                 import keyboard as kb
-                kb.unhook_all_hotkeys()
+                for handle in self._keyboard_handles:
+                    try:
+                        kb.remove_hotkey(handle)
+                    except Exception:
+                        pass
+                self._keyboard_handles.clear()
             except Exception:
                 pass
             self._keyboard_hooked = False
@@ -698,18 +738,38 @@ class ScoreboardApp(QMainWindow):
         self.hotkeys_enabled = False
         self.status_bar.showMessage("Hotkeys desativados")
 
-    # ── Hotkey config persistence ──────────────────────────────────────────────
+    @staticmethod
+    def _qt_key_to_kb(qt_key: str) -> str:
+        """Convert Qt portable key sequence string to 'keyboard' lib format."""
+        special = {
+            "Return": "enter", "Escape": "esc", "Delete": "delete",
+            "Backspace": "backspace", "Tab": "tab", "Space": "space",
+            "Up": "up", "Down": "down", "Left": "left", "Right": "right",
+            "PageUp": "page up", "PageDown": "page down",
+            "Home": "home", "End": "end", "Insert": "insert",
+            "Plus": "+", "Minus": "-",
+        }
+        result = qt_key
+        for qt_name, kb_name in special.items():
+            result = result.replace(qt_name, kb_name)
+        return result.lower()
+
+    # ── Config persistence ─────────────────────────────────────────────────────
 
     def _load_hotkeys(self) -> dict[str, str]:
         if CONFIG_FILE.exists():
             try:
-                return {**DEFAULT_HOTKEYS, **json.loads(CONFIG_FILE.read_text())}
+                saved = json.loads(CONFIG_FILE.read_text())
+                return {**DEFAULT_HOTKEYS, **saved}
             except Exception:
                 pass
         return dict(DEFAULT_HOTKEYS)
 
     def _save_hotkeys(self) -> None:
-        CONFIG_FILE.write_text(json.dumps(self.hotkeys, indent=2))
+        try:
+            CONFIG_FILE.write_text(json.dumps(self.hotkeys, indent=2))
+        except Exception:
+            pass
 
     # ── OBS output ────────────────────────────────────────────────────────────
 
@@ -741,8 +801,7 @@ class ScoreboardApp(QMainWindow):
             QTabWidget::pane { border: 1px solid #45475a; }
             QTabBar::tab {
                 background: #313244; color: #cdd6f4;
-                padding: 7px 18px; border: 1px solid #45475a;
-                border-bottom: none;
+                padding: 7px 18px; border: 1px solid #45475a; border-bottom: none;
             }
             QTabBar::tab:selected { background: #45475a; color: #ffffff; }
             QPushButton {
@@ -750,15 +809,15 @@ class ScoreboardApp(QMainWindow):
                 border: 1px solid #45475a; border-radius: 5px;
                 padding: 4px 10px; min-height: 28px;
             }
-            QPushButton:hover    { background: #45475a; }
-            QPushButton:pressed  { background: #585b70; }
+            QPushButton:hover   { background: #45475a; }
+            QPushButton:pressed { background: #585b70; }
             QPushButton#startButton {
                 background: #1e6b1e; color: #ffffff;
                 border: 1px solid #28a828; font-weight: bold;
             }
             QPushButton#startButton:hover { background: #248a24; }
             QPushButton#btnTry  { background: #1d6b2a; color: #fff; border-color: #28a040; }
-            QPushButton#btnTry:hover { background: #258035; }
+            QPushButton#btnTry:hover  { background: #258035; }
             QPushButton#btnPen  { background: #1a3d7a; color: #fff; border-color: #2a5ab0; }
             QPushButton#btnPen:hover  { background: #1f4a96; }
             QPushButton#btnCnv  { background: #7a5a1a; color: #fff; border-color: #a07820; }
@@ -767,12 +826,13 @@ class ScoreboardApp(QMainWindow):
             QPushButton#btnDrp:hover  { background: #6a208a; }
             QPushButton#btnUndo { background: #7a1a1a; color: #fff; border-color: #a02020; }
             QPushButton#btnUndo:hover { background: #8a2020; }
-            QLabel { color: #cdd6f4; }
+            QLabel            { color: #cdd6f4; }
             QLabel#clockLabel { color: #f5c842; }
-            QLineEdit, QSpinBox {
+            QLineEdit, QSpinBox, QKeySequenceEdit {
                 background: #313244; color: #cdd6f4;
                 border: 1px solid #45475a; border-radius: 4px; padding: 4px;
             }
+            QKeySequenceEdit:focus { border-color: #89b4fa; }
             QGroupBox {
                 border: 1px solid #45475a; border-radius: 5px;
                 margin-top: 10px; padding-top: 6px;
