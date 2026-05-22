@@ -367,7 +367,7 @@ class ScoreboardApp(QMainWindow):
         mode_layout.addWidget(self._stopwatch_rb)
         layout.addWidget(mode_group)
 
-        preset_group = QGroupBox("Presets de Duração do Tempo  (sempre em Contagem Regressiva)")
+        preset_group = QGroupBox("Presets de Duração do Tempo  (ativa Cronômetro — conta a partir do zero)")
         preset_grid = QGridLayout(preset_group)
         preset_grid.setSpacing(6)
 
@@ -670,12 +670,13 @@ class ScoreboardApp(QMainWindow):
         if self.timer_running:
             self.status_bar.showMessage("Pare o cronômetro antes de trocar o preset")
             return
-        # Presets sempre usam contagem regressiva
-        self._countdown_rb.blockSignals(True)
-        self._countdown_rb.setChecked(True)
-        self._countdown_rb.blockSignals(False)
-        self.timer_direction = "countdown"
+        # Presets ativam cronômetro (conta a partir do zero)
+        self._stopwatch_rb.blockSignals(True)
+        self._stopwatch_rb.setChecked(True)
+        self._stopwatch_rb.blockSignals(False)
+        self.timer_direction = "stopwatch"
 
+        # Guarda a duração do tempo nos spinboxes como referência
         self._min_spin.blockSignals(True)
         self._sec_spin.blockSignals(True)
         self._min_spin.setValue(minutes)
@@ -683,11 +684,12 @@ class ScoreboardApp(QMainWindow):
         self._min_spin.blockSignals(False)
         self._sec_spin.blockSignals(False)
 
-        self.timer_minutes = minutes
+        # Cronômetro sempre começa do zero
+        self.timer_minutes = 0
         self.timer_seconds = 0
         self._refresh_clock_display()
         self._write_outputs()
-        self.status_bar.showMessage(f"Preset: {minutes} min — Contagem Regressiva")
+        self.status_bar.showMessage(f"Preset: {minutes} min — Cronômetro (00:00 → {minutes:02d}:00)")
 
     # ── Logic: Settings ────────────────────────────────────────────────────────
 
