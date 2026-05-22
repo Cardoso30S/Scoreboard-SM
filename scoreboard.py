@@ -975,11 +975,46 @@ class ScoreboardApp(QMainWindow):
             QPushButton#btnUndo:hover { background: #8a2020; }
             QLabel            { color: #cdd6f4; }
             QLabel#clockLabel { color: #f5c842; }
-            QLineEdit, QSpinBox, QKeySequenceEdit {
+            QLineEdit, QKeySequenceEdit {
                 background: #313244; color: #cdd6f4;
                 border: 1px solid #45475a; border-radius: 4px; padding: 4px;
             }
             QKeySequenceEdit:focus { border-color: #89b4fa; }
+            QSpinBox {
+                background: #313244; color: #cdd6f4;
+                border: 1px solid #45475a; border-radius: 4px; padding: 4px;
+                padding-right: 20px;
+            }
+            QSpinBox::up-button {
+                subcontrol-origin: border; subcontrol-position: top right;
+                width: 18px; height: 12px;
+                border-left: 1px solid #45475a; border-bottom: 1px solid #45475a;
+                background: #45475a;
+            }
+            QSpinBox::up-button:hover { background: #585b70; }
+            QSpinBox::up-button:pressed { background: #6c6f85; }
+            QSpinBox::up-arrow {
+                width: 8px; height: 8px;
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-bottom: 5px solid #cdd6f4;
+            }
+            QSpinBox::down-button {
+                subcontrol-origin: border; subcontrol-position: bottom right;
+                width: 18px; height: 12px;
+                border-left: 1px solid #45475a; border-top: 1px solid #45475a;
+                background: #45475a;
+            }
+            QSpinBox::down-button:hover { background: #585b70; }
+            QSpinBox::down-button:pressed { background: #6c6f85; }
+            QSpinBox::down-arrow {
+                width: 8px; height: 8px;
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #cdd6f4;
+            }
             QGroupBox {
                 border: 1px solid #45475a; border-radius: 5px;
                 margin-top: 10px; padding-top: 6px;
