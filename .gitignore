@@ -6,5 +6,6 @@ hotkeys.json
 *.egg-info/
 dist/
 build/
+*.spec
 .venv/
 venv/
