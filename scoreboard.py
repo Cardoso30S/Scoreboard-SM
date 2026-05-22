@@ -429,10 +429,12 @@ class ScoreboardApp(QMainWindow):
         preset_grid.setSpacing(6)
 
         presets = [
-            ("Rugby 7s\n7 min / tempo", 7),
+            ("1 min", 1),
+            ("5 min", 5),
+            ("Rugby 7s\n7 min", 7),
             ("10 min", 10),
             ("20 min", 20),
-            ("Rugby XV\n40 min / tempo", 40),
+            ("Rugby XV\n40 min", 40),
         ]
         for col, (label, mins) in enumerate(presets):
             btn = QPushButton(label)
