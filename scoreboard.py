@@ -251,6 +251,7 @@ class ScoreboardApp(QMainWindow):
         btn_try.setMinimumHeight(44)
         btn_try.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         btn_try.setObjectName("btnTry")
+        btn_try.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         panel.addWidget(btn_try)
 
         row1 = QHBoxLayout()
@@ -260,6 +261,7 @@ class ScoreboardApp(QMainWindow):
         btn_cnv.setObjectName("btnCnv")
         for b in [btn_pen, btn_cnv]:
             b.setMinimumHeight(42)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         row1.addWidget(btn_pen)
         row1.addWidget(btn_cnv)
         panel.addLayout(row1)
@@ -271,6 +273,7 @@ class ScoreboardApp(QMainWindow):
         btn_undo.setObjectName("btnUndo")
         for b in [btn_drp, btn_undo]:
             b.setMinimumHeight(42)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         row2.addWidget(btn_drp)
         row2.addWidget(btn_undo)
         panel.addLayout(row2)
@@ -364,13 +367,23 @@ class ScoreboardApp(QMainWindow):
         mode_layout.addWidget(self._stopwatch_rb)
         layout.addWidget(mode_group)
 
-        preset_group = QGroupBox("Presets de Duração do Tempo")
-        preset_row = QHBoxLayout(preset_group)
-        for label, mins in [("10 min", 10), ("20 min", 20), ("40 min", 40), ("80 min (Jogo)", 80)]:
+        preset_group = QGroupBox("Presets de Duração do Tempo  (sempre em Contagem Regressiva)")
+        preset_grid = QGridLayout(preset_group)
+        preset_grid.setSpacing(6)
+
+        presets = [
+            ("Rugby 7s\n7 min / tempo", 7),
+            ("10 min", 10),
+            ("20 min", 20),
+            ("Rugby XV\n40 min / tempo", 40),
+        ]
+        for col, (label, mins) in enumerate(presets):
             btn = QPushButton(label)
-            btn.setMinimumHeight(34)
+            btn.setMinimumHeight(44)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.clicked.connect(lambda _, m=mins: self._set_preset(m))
-            preset_row.addWidget(btn)
+            preset_grid.addWidget(btn, 0, col)
+
         layout.addWidget(preset_group)
 
         obs_group = QGroupBox("Saída para OBS (arquivos de texto)")
@@ -632,16 +645,49 @@ class ScoreboardApp(QMainWindow):
         self._clock_label.setText(f"{self.timer_minutes:02d}:{self.timer_seconds:02d}")
 
     def _on_timer_mode_changed(self) -> None:
-        self.timer_direction = "countdown" if self._countdown_rb.isChecked() else "stopwatch"
+        if self._countdown_rb.isChecked():
+            self.timer_direction = "countdown"
+            # Restaura o valor configurado nos spinboxes
+            if not self.timer_running:
+                self.timer_minutes = self._min_spin.value()
+                self.timer_seconds = self._sec_spin.value()
+                self._refresh_clock_display()
+                self._write_outputs()
+        else:
+            self.timer_direction = "stopwatch"
+            # Cronômetro sempre começa do zero
+            if not self.timer_running:
+                self.timer_minutes = 0
+                self.timer_seconds = 0
+                self._refresh_clock_display()
+                self._write_outputs()
+        self.status_bar.showMessage(
+            "Modo: Contagem Regressiva" if self.timer_direction == "countdown"
+            else "Modo: Cronômetro (00:00 → ∞)"
+        )
 
     def _set_preset(self, minutes: int) -> None:
+        if self.timer_running:
+            self.status_bar.showMessage("Pare o cronômetro antes de trocar o preset")
+            return
+        # Presets sempre usam contagem regressiva
+        self._countdown_rb.blockSignals(True)
+        self._countdown_rb.setChecked(True)
+        self._countdown_rb.blockSignals(False)
+        self.timer_direction = "countdown"
+
+        self._min_spin.blockSignals(True)
+        self._sec_spin.blockSignals(True)
         self._min_spin.setValue(minutes)
         self._sec_spin.setValue(0)
-        if not self.timer_running:
-            self.timer_minutes = minutes
-            self.timer_seconds = 0
-            self._refresh_clock_display()
-        self.status_bar.showMessage(f"Preset: {minutes} minutos")
+        self._min_spin.blockSignals(False)
+        self._sec_spin.blockSignals(False)
+
+        self.timer_minutes = minutes
+        self.timer_seconds = 0
+        self._refresh_clock_display()
+        self._write_outputs()
+        self.status_bar.showMessage(f"Preset: {minutes} min — Contagem Regressiva")
 
     # ── Logic: Settings ────────────────────────────────────────────────────────
 
@@ -696,7 +742,9 @@ class ScoreboardApp(QMainWindow):
                     continue
                 kb_key = self._qt_key_to_kb(key_str)
                 try:
-                    handle = kb.add_hotkey(kb_key, callback)
+                    # Executa no thread Qt e bloqueia se um campo de texto estiver focado
+                    safe_cb = self._make_kb_callback(callback)
+                    handle = kb.add_hotkey(kb_key, safe_cb)
                     self._keyboard_handles.append(handle)
                 except Exception:
                     pass  # skip invalid/unsupported combos silently
@@ -750,6 +798,19 @@ class ScoreboardApp(QMainWindow):
 
         self.hotkeys_enabled = False
         self.status_bar.showMessage("Hotkeys desativados")
+
+    def _no_input_focused(self) -> bool:
+        """Retorna True se nenhum campo de texto tem foco."""
+        from PyQt6.QtWidgets import QApplication as _App
+        fw = _App.focusWidget()
+        return not isinstance(fw, (QLineEdit, QSpinBox, QKeySequenceEdit))
+
+    def _make_kb_callback(self, fn):
+        """Envolve fn para rodar no thread Qt apenas quando nenhum input tem foco."""
+        def cb():
+            # keyboard lib chama isso em thread separado; usa singleShot para ir ao Qt
+            QTimer.singleShot(0, lambda: fn() if self._no_input_focused() else None)
+        return cb
 
     @staticmethod
     def _qt_key_to_kb(qt_key: str) -> str:
