@@ -155,7 +155,8 @@ class ScoreboardApp(QMainWindow):
         self.timer_minutes   = 40
         self.timer_seconds   = 0
         self.timer_direction = "countdown"  # "countdown" | "stopwatch"
-        self._stopwatch_target = (0, 0)     # (min, seg) — (0,0) = sem limite
+        self._stopwatch_target    = (0, 0)   # (min, seg) — (0,0) = sem limite
+        self._preset_half_duration = 0       # duração de cada tempo do preset ativo (0 = sem preset)
 
         # Hotkey state
         self.hotkeys_enabled    = False
@@ -640,6 +641,9 @@ class ScoreboardApp(QMainWindow):
         self.half = max(1, self.half + delta)
         self._half_label.setText(HALF_NAMES.get(self.half, f"Tempo {self.half}"))
         self.status_bar.showMessage(HALF_NAMES.get(self.half, f"Tempo {self.half}"))
+        # Se há um preset ativo, atualiza o alvo para half × duração (contagem acumulada)
+        if self._preset_half_duration > 0:
+            self._stopwatch_target = (self.half * self._preset_half_duration, 0)
         self._write_outputs()
 
     # ── Logic: Timer ──────────────────────────────────────────────────────────
@@ -700,8 +704,10 @@ class ScoreboardApp(QMainWindow):
             self.status_bar.showMessage("Pare o cronômetro antes de resetar")
             return
         if self.timer_direction == "stopwatch":
-            # Cronômetro volta sempre para 00:00
-            self.timer_minutes = 0
+            # Com preset ativo: volta ao início do tempo atual (ex: 2º tempo → 07:00)
+            # Sem preset: volta ao 00:00
+            start = (self.half - 1) * self._preset_half_duration
+            self.timer_minutes = start
             self.timer_seconds = 0
         else:
             # Contagem regressiva volta para o valor configurado
@@ -715,7 +721,8 @@ class ScoreboardApp(QMainWindow):
         if not self.timer_running:
             self.timer_minutes = self._min_spin.value()
             self.timer_seconds = self._sec_spin.value()
-            self._stopwatch_target = (0, 0)  # edição manual cancela o alvo do preset
+            self._stopwatch_target = (0, 0)     # edição manual cancela o alvo do preset
+            self._preset_half_duration = 0       # sem preset ativo
             self._refresh_clock_display()
             self._write_outputs()
 
@@ -762,15 +769,24 @@ class ScoreboardApp(QMainWindow):
         self._min_spin.blockSignals(False)
         self._sec_spin.blockSignals(False)
 
-        # Define o alvo: para automaticamente ao atingir este tempo
-        self._stopwatch_target = (minutes, 0)
+        # Salva a duração por tempo para calcular alvo em tempos subsequentes
+        self._preset_half_duration = minutes
 
-        # Cronômetro sempre começa do zero
-        self.timer_minutes = 0
+        # Alvo: half atual × duração (acumulado correto independente do tempo)
+        target = self.half * minutes
+        self._stopwatch_target = (target, 0)
+
+        # Cronômetro reinicia no início do tempo atual
+        self.timer_minutes = (self.half - 1) * minutes
         self.timer_seconds = 0
         self._refresh_clock_display()
         self._write_outputs()
-        self.status_bar.showMessage(f"Preset: {minutes} min — Cronômetro (00:00 → {minutes:02d}:00)")
+        total = minutes * 2
+        self.status_bar.showMessage(
+            f"Preset: {minutes} min/tempo — "
+            f"Tempo {self.half}: {(self.half-1)*minutes:02d}:00 → {target:02d}:00  "
+            f"(total: {total} min)"
+        )
 
     # ── Logic: Settings ────────────────────────────────────────────────────────
 
