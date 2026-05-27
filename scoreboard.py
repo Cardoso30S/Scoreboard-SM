@@ -950,7 +950,10 @@ class ScoreboardApp(QMainWindow):
         }
         for name, content in files.items():
             try:
-                (OUTPUT_DIR / name).write_text(content, encoding="utf-8")
+                target = OUTPUT_DIR / name
+                tmp    = target.with_suffix(".tmp")
+                tmp.write_text(content, encoding="utf-8")
+                tmp.replace(target)  # rename atômico — OBS nunca lê arquivo vazio
             except OSError:
                 pass
 
